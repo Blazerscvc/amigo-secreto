@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Secret Santa 🎅🎄</title>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&family=Press+Start+2P&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- CAPA GLOBAL PARA EFECTOS VISUALES -->
+  <canvas id="efectos-canvas" class="hidden"></canvas>
+  <button id="btn-disable-effects" class="hidden" onclick="window.limpiarEfectosGlobales(true)">👁️ Modo Tranquilo</button>
+  
+  <!-- BOTÓN FLOTANTE: VOLVER A MODO ADMIN -->
+  <button id="btn-volver-admin" class="hidden" onclick="toggleModoJugador()">👑 Admin</button>
+
+  <!-- PISTA VISIBLE FUERA DEL CONTENEDOR PARA EL APAGÓN -->
+  <div id="apagon-hint" class="hidden apagon-hint">💡 Arrastra el dedo para iluminar</div>
+
+  <!-- PANTALLA INTERMEDIA PARA ACTIVAR AUDIO -->
+  <div id="audio-overlay" class="hidden fullscreen-modal" style="z-index: 10000; flex-direction: column; background: rgba(0,0,0,0.95);">
+    <h2 class="pixel-text" style="color: #ffbe0b; text-align: center; margin-bottom: 30px;">¡LA RULETA GIRÓ!</h2>
+    <button id="btn-start-scene" class="btn" style="background: #c71f37; width: 80%; max-width: 300px; padding: 20px; font-size: 1.2rem;">Toca para ver qué pasó 🎡</button>
+  </div>
+
+  <!-- MODAL DE LA RULETA -->
+  <div id="roulette-modal" class="hidden fullscreen-modal">
+    <div class="modal-content">
+      <h2 id="modal-ruleta-titulo" class="pixel-text" style="color: #ffbe0b; text-shadow: 2px 2px 0px #000;">LA RULETA DECIDE</h2>
+      <div class="canvas-container">
+        <div class="ruleta-puntero">▼</div>
+        <canvas id="roulette-canvas" width="300" height="300"></canvas>
+      </div>
+      <div id="roulette-modal-result" class="hidden">
+        <h3 id="modal-event-title" class="pixel-text">---</h3>
+        <p id="modal-event-desc" style="font-size: 1.1rem;">---</p>
+        <button id="btn-aceptar-destino" class="btn-small" style="background: #1a5e20; width: 80%; margin: 15px auto;">Aceptar mi Destino</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PANTALLA GIGANTE: MODO CENA -->
+  <div id="cena-screen" class="hidden fullscreen-cena">
+    <button class="btn-cerrar-cena" onclick="cerrarModoCena()">✖ Cerrar Proyector</button>
+    <h1 class="pixel-text cena-title">🎄 GRAN CENA DEDSAFIO 🎄</h1>
+    <div class="cena-layout">
+      <div class="cena-ruleta-box">
+        <div class="ruleta-puntero" style="font-size: 4rem; top: -30px;">▼</div>
+        <canvas id="cena-canvas" width="600" height="600"></canvas>
+      </div>
+      <div class="cena-controls">
+        <div id="cena-resultado-box" class="hidden">
+          <h2 id="cena-event-title" class="pixel-text" style="font-size: 2rem;">---</h2>
+          <p id="cena-event-desc" style="font-size: 1.5rem; margin-top: 20px;">---</p>
+        </div>
+        <button id="btn-girar-cena" class="pixel-text btn-cena-girar" onclick="girarModoCena()">GIRAR RULETA DE LA CENA</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ENVOLTORIO PARA EFECTOS -->
+  <div id="app-wrapper">
+    <div class="container" id="main-container">
+      
+      <!-- LOGIN / REGISTRO -->
+      <div id="auth-screen">
+        <h1 id="auth-title">🎅 Secret Santa</h1>
+        <p style="text-align: center; color: #666; margin-bottom: 25px;">¡Regístrate para la magia navideña!</p>
+        <form id="auth-form">
+          <div class="form-group hidden" id="name-group"><label>Tu Nombre Completo:</label><input type="text" id="name" placeholder="Ej. Carlos Pérez"></div>
+          <div class="form-group"><label>Correo Electrónico:</label><input type="email" id="email" required placeholder="correo@ejemplo.com"></div>
+          <div class="form-group"><label>Contraseña:</label><input type="password" id="password" required></div>
+          <button type="submit" id="auth-btn">Iniciar Sesión 🎄</button>
+        </form>
+        <div class="auth-links">
+          <a id="toggle-auth" href="#" class="custom-link">¿No tienes cuenta? Regístrate</a><br>
+          <a id="forgot-password" href="#" class="custom-link" style="font-size: 0.8rem;">¿Olvidaste tu contraseña?</a>
+        </div>
+      </div>
+
+      <!-- PREFERENCIAS Y APORTE -->
+      <div id="preferences-screen" class="hidden">
+        <h2 id="pref-title">Carta a Santa 📝</h2>
+        <div class="presupuesto-tag">Presupuesto Sugerido: $35.000 COP</div>
+        <button id="cancel-edit-btn" class="btn-secondary btn-small hidden" style="margin-bottom: 15px;">Cancelar Edición</button>
+        <form id="preferences-form">
+          <div class="form-group"><label>🎁 Mis Gustos:</label><textarea id="pref-regalo" rows="3" required style="width: 100%; padding: 10px; border: 2px solid #eee; border-radius: 8px; font-family: 'Poppins';"></textarea></div>
+          <div class="form-group"><label>🥘 Aporte para la cena:</label><input type="text" id="pref-comida" required placeholder="Ej: Arroz, postre, bebidas, etc."></div>
+          <button type="submit" id="pref-btn" style="background-color: var(--secondary);">Guardar mi Carta ✨</button>
+        </form>
+      </div>
+
+      <!-- DASHBOARD -->
+      <div id="dashboard-screen" class="hidden">
+        <div id="admin-banner" class="hidden" style="background: #ffbe0b; color: #000; padding: 10px; text-align: center; border-radius: 8px; font-weight: bold; margin-bottom: 15px; animation: pulse 2s infinite;">¡ANUNCIO DEL ADMIN!</div>
+        
+        <h2 id="welcome-user">¡Hola! 👋</h2>
+
+        <!-- BARRA DE ECONOMÍA (FASE 3: Equipo) -->
+        <div id="economy-bar" class="economy-bar">
+          <div class="stat-badge" title="Tu Equipo">🛡️ <span id="user-equipo">Sin Equipo</span></div>
+          <div class="stat-badge" title="Tus Copos de Nieve">❄️ <span id="user-copos">--</span></div>
+          <div class="stat-badge" title="Tus Tótems (Vidas)">🗿 <span id="user-totems">--</span></div>
+          <div class="stat-badge" title="Tu Estado">❤️ <span id="user-estado">Vivo</span></div>
+        </div>
+
+        <!-- MISIONES DIARIAS -->
+        <div id="missions-section" class="missions-container">
+          <h3>🎯 Misiones Diarias</h3>
+          
+          <div class="mission-item">
+            <div class="mission-info">
+              <span class="mission-title">Bono de Ingreso Diario</span>
+              <span class="mission-reward">+5 Copos ❄️</span>
+            </div>
+            <button id="btn-reclamar-bono" class="btn-small mission-btn" onclick="window.reclamarRecompensa('bono', 5)">Reclamar</button>
+          </div>
+
+          <div class="mission-item">
+            <div class="mission-info">
+              <span class="mission-title">Deja un mensaje en el Buzón</span>
+              <span class="mission-reward">+10 Copos ❄️</span>
+            </div>
+            <button id="btn-reclamar-buzon" class="btn-small mission-btn" onclick="window.reclamarRecompensa('buzon', 10)">Reclamar</button>
+          </div>
+        </div>
+
+        <!-- EL BANCO (REGISTRO PÚBLICO FASE 3) -->
+        <div id="banco-section" class="banco-container">
+          <h3>🏦 El Banco (Registro Público)</h3>
+          <div id="banco-list" class="message-list banco-list-custom">
+            <div style="text-align: center; color: #888; font-size: 0.85rem; padding: 10px;">El banco está vacío.</div>
+          </div>
+        </div>
+        
+        <div class="countdown-banner">
+          <div style="font-size: 0.9rem; color: white;">Faltan para la gran cena:</div>
+          <div id="countdown" class="countdown-timer pixel-text" style="font-size: 1.1rem; margin-top: 5px; color: white;">Cargando...</div>
+          <div id="fase-actual-display" style="margin-top: 10px; font-size: 0.8rem; background: rgba(0,0,0,0.5); padding: 5px; border-radius: 5px; color: #ffbe0b;">Fase: Calculando...</div>
+        </div>
+
+        <!-- TARJETA DEL RETO VIGENTE -->
+        <div id="active-challenge-card" class="active-challenge-card">
+          <h3>📢 Reto Vigente</h3>
+          <div id="no-active-event-msg" class="active-challenge-empty">No hay ningún evento activo en este momento.</div>
+          
+          <div id="active-event-info" class="hidden">
+            <span id="active-event-family" class="active-challenge-tag">Familia</span>
+            <h4 id="active-event-title">Título del Evento</h4>
+            <p id="active-event-desc">Descripción...</p>
+            <div id="active-event-expires" class="active-challenge-expires">Expira: --</div>
+            <button id="btn-replay-roulette" class="btn-small" style="background:var(--primary); width:100%;"><span style="font-size:1.1rem; vertical-align: middle;">🎡</span> Volver a ver la ruleta</button>
+          </div>
+        </div>
+
+        <!-- HISTORIAL DEDSAFIO -->
+        <div id="history-wall" class="history-wall">
+          <h3>📜 Archivo DEDSAFIO</h3>
+          <div id="estado-evento-actual" style="margin-bottom: 10px; font-weight: bold; font-size: 0.9rem; color: #a5d6a7;">Sin eventos activos.</div>
+          <div id="history-list" class="message-list history-list-custom"></div>
+        </div>
+        
+        <div id="no-draw-message" style="text-align: center; color: #555; background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+          <p>✅ <strong>Tu carta está guardada.</strong></p>
+          <button id="edit-pref-btn" class="btn-secondary btn-small">Editar mi carta ✏️</button>
+        </div>
+
+        <div id="draw-result" class="hidden">
+          <h2>🤫 Eres el Secret Santa de...</h2>
+          <div style="font-size: 0.8rem; color: #666;">(Toca para revelar)</div>
+          <h1 style="font-size: 2.2rem; margin: 5px 0 15px 0;"><span id="assigned-friend-name" class="spoiler" onclick="this.classList.toggle('revealed')">---</span></h1>
+          
+          <div class="card-preference"><strong>🎁 Le gustaría recibir:</strong><div id="friend-regalo" style="white-space: pre-wrap; margin-top:5px;">-</div></div>
+          <div class="card-preference"><strong>🥘 Traerá para la cena:</strong><span id="friend-comida">-</span></div>
+          <button id="edit-pref-btn-drawn" class="btn-secondary btn-small" style="width: 100%; margin-top: 10px;">Editar mi propia carta ✏️</button>
+
+          <div class="chat-box">
+            <h3>📬 Buzón Anónimo</h3>
+            <div id="inbox-messages" class="message-list">Sin cartas aún.</div>
+            <form id="chat-form" style="margin-top: 15px;">
+              <div style="display: flex; gap: 10px;">
+                <input type="text" id="chat-input" placeholder="Mensaje anónimo..." required>
+                <button type="submit" id="send-msg-btn" class="btn-small" style="width: auto; margin-top: 0;">Enviar</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- PANEL ADMIN -->
+        <div id="admin-panel" class="admin-panel hidden">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="color: #c71f37; margin: 0;">👑 TRINEO DE CONTROL</h3>
+            <button class="btn-small" style="background:#0d2b0e; margin:0;" onclick="toggleModoJugador()">👁️ Ver como Jugador</button>
+          </div>
+          
+          <details class="admin-details">
+            <summary>👥 Sorteo y Usuarios (Incluye Economía)</summary>
+            <div class="admin-section" style="margin-top: 5px;">
+              <h4>Gestión de Elfos, Economía y Equipos</h4>
+              <div id="admin-users-list">Cargando...</div>
+            </div>
+            
+            <div class="admin-section">
+              <h4>🎯 Sortear Persona (Castigos / Apodos)</h4>
+              <p style="font-size: 0.75rem; color: #666; margin-bottom: 8px;">Elige al azar a un usuario que no haya salido antes en un sorteo de persona.</p>
+              <button class="btn-small" style="background:#d90429; color:white; font-weight:bold; margin-bottom:5px;" onclick="sortearPersonaAdmin()">🎲 Sortear Persona</button>
+              <button class="btn-small btn-secondary" style="margin:0;" onclick="reiniciarSorteosPersonaAdmin()">🔄 Reiniciar Historial de Sorteados</button>
+              <div id="sorteo-persona-resultado" class="hidden" style="margin-top:10px; padding:12px; background:#fff; border:2px solid #ffbe0b; border-radius:8px; text-align:center;">
+                <div style="font-size:0.8rem; color:#666;">🎯 Persona Seleccionada:</div>
+                <h2 id="sorteo-persona-nombre" class="pixel-text" style="font-size:1.4rem; color:#c71f37; margin:8px 0;">---</h2>
+              </div>
+            </div>
+          </details>
+
+          <details class="admin-details">
+            <summary>🚫 Exclusiones</summary>
+            <div class="admin-section" style="margin-top: 5px;">
+              <p style="font-size: 0.75rem; color: #666; margin-bottom: 8px;">Configura qué parejas no se pueden repetir.</p>
+              <div id="admin-exclusiones-lista" style="font-size: 0.8rem; margin-bottom: 8px; background:#fff; padding:8px; border-radius:5px; border:1px solid #ddd; max-height:100px; overflow-y:auto;">Cargando exclusiones...</div>
+              <button type="button" class="btn-small" style="background:#6a4c93; margin:0;" onclick="agregarExclusionManualAdmin()">➕ Agregar Exclusión</button>
+            </div>
+          </details>
+
+          <details class="admin-details">
+            <summary>⚙️ Dificultad y Fases</summary>
+            <div class="admin-section" style="margin-top: 5px;">
+              <label>Forzar Fase (Ignorar fecha):</label>
+              <select id="select-fase-admin" onchange="forzarFase(this.value)" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+                <option value="auto">Automático (Por Fecha)</option>
+                <option value="Tranquila">Tranquila</option>
+                <option value="Picante">Picante</option>
+                <option value="Caos">Caos</option>
+                <option value="Semana Revil">Semana Revil</option>
+              </select>
+              <div id="admin-multiplicadores"></div>
+              <button class="btn-small" onclick="guardarMultiplicadores()" style="background:#6a4c93;">Guardar Multiplicadores</button>
+            </div>
+          </details>
+
+          <details class="admin-details">
+            <summary>🎡 Ruleta y Eventos</summary>
+            <div class="admin-section" style="margin-top: 5px;">
+              <h4>Lanzamiento de Ruleta Global</h4>
+              <button id="admin-spin-btn" class="btn pixel-text" style="background-color: #c71f37; padding: 15px; width: 100%; margin-bottom: 10px;" onclick="iniciarGiroAdmin()">GIRAR GLOBAL</button>
+            </div>
+
+            <div class="admin-section">
+              <h4>📝 Editor de Eventos</h4>
+              <div style="margin-bottom: 10px;">
+                <button type="button" class="btn-small" style="background: #1a5e20; width: 100%; font-weight: bold; margin:0;" onclick="sincronizarEventosBase()">🔄 Sincronizar eventos base</button>
+              </div>
+              <div style="max-height: 200px; overflow-y: auto; background: #fff; border: 1px solid #ccc; padding: 5px; margin-bottom: 10px;" id="admin-eventos-lista"></div>
+              <form id="form-editar-evento" style="background: #f0f0f0; padding: 10px; border-radius: 5px; border: 1px solid #ddd;">
+                <input type="hidden" id="edit-ev-id">
+                <input type="text" id="edit-ev-titulo" placeholder="Título" required style="margin-bottom: 5px;">
+                <textarea id="edit-ev-texto" placeholder="Descripción del evento..." required rows="2" style="margin-bottom: 5px;"></textarea>
+                <div style="display: flex; gap: 5px; margin-bottom: 5px;">
+                  <select id="edit-ev-familia" required>
+                    <option value="Nutria">Nutria (Bueno)</option>
+                    <option value="Revil">Revil (Malo)</option>
+                    <option value="Dificultad">Dificultad</option>
+                    <option value="Novedad">Novedad</option>
+                  </select>
+                  <input type="number" id="edit-ev-peso" placeholder="Peso (ej. 10)" required style="width: 80px;">
+                </div>
+                <div style="display: flex; gap: 5px; margin-bottom: 5px;">
+                  <select id="edit-ev-efecto" required>
+                    <option value="nada">Sin Efecto</option>
+                    <option value="apagon">Apagón</option>
+                    <option value="tormenta">Tormenta Nieve</option>
+                    <option value="minecraft">Minecraft</option>
+                    <option value="al-reves">Mundo al Revés</option>
+                    <option value="grinch">Grinch</option>
+                    <option value="glitch">Glitch</option>
+                    <option value="fugitivos">Botones Fugitivos</option>
+                    <option value="nutrias">Lluvia Nutrias</option>
+                    <option value="caos">Caos Revil</option>
+                  </select>
+                  <label style="display:flex; align-items:center; gap:5px;"><input type="checkbox" id="edit-ev-activo" checked> Activo</label>
+                </div>
+                <button type="submit" class="btn-small" style="background: #6a4c93;">Guardar Evento</button>
+                <button type="button" class="btn-small btn-secondary" onclick="limpiarFormEvento()">Nuevo / Limpiar</button>
+              </form>
+            </div>
+          </details>
+
+          <details class="admin-details">
+            <summary>🎄 MODO CENA (En Vivo)</summary>
+            <div class="admin-section" style="background: #0d2b0e; border-color: #ffbe0b; margin-top: 5px;">
+              <p style="font-size: 0.8rem; color: #ccc;">Para proyectar el 28 de Noviembre.</p>
+              <button class="btn" style="background: #ffbe0b; color: #000;" onclick="abrirModoCena()">ABRIR PROYECTOR</button>
+            </div>
+          </details>
+
+          <details class="admin-details risk-zone" style="margin-top: 20px;">
+            <summary>🚨 Zona de Riesgo (Acciones Destructivas)</summary>
+            <div class="admin-section" style="margin-top: 5px; background: transparent; border: none;">
+              <p style="font-size: 0.8rem; color: #666; margin-bottom: 10px;">Requieren escribir CONFIRMAR antes de ejecutarse.</p>
+              <button id="draw-btn" class="btn-small" style="background-color: #f4a261; color: #000; margin-bottom: 10px;">🎲 Repetir Sorteo Mágico</button>
+              <button class="btn-small btn-secondary" style="margin-bottom: 10px;" onclick="terminarEventoGlobal()">⏹️ Terminar Evento Actual</button>
+              <button class="btn-small btn-secondary" style="margin-bottom: 10px;" onclick="limpiarExclusionesAdmin()">🗑️ Limpiar Todas las Exclusiones</button>
+              <button class="btn-danger" style="margin-top: 15px;" onclick="window.emergencyKillSwitch()">🛑 APAGAR EVENTO GLOBAL INSTANTÁNEO</button>
+            </div>
+          </details>
+
+        </div>
+
+        <button id="logout-btn" class="btn-secondary" style="margin-top: 20px;">Cerrar Sesión</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="eventos.js"></script>
+  <script src="efectos.js"></script>
+  <script src="ruleta.js"></script>
+  <script src="admin.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
