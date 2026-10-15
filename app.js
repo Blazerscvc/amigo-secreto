@@ -14,11 +14,11 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 let isAdmin = false; let myAssignedFriendId = null;
-let myUserName = "Un Elfo"; // Variable para saber el nombre en el banco
+let myUserName = "Un Elfo"; let myCurrentCopos = 0; let myCurrentTotems = 0;
 const fechaCena = new Date(2026, 10, 28, 20, 0, 0).getTime();
 
-// NUEVO: unsubBancoRegistry para el registro público
-let unsubMyUser = null; let unsubFases = null; let unsubEventos = null; let unsubGlobal = null; let unsubHistorial = null; let unsubUsers = null; let unsubBuzon = null; let unsubAsignaciones = null; let unsubBancoRegistry = null; let buzonInterval = null; let countdownInterval = null;
+// NUEVO: unsubTienda para la fase 4
+let unsubMyUser = null; let unsubFases = null; let unsubEventos = null; let unsubGlobal = null; let unsubHistorial = null; let unsubUsers = null; let unsubBuzon = null; let unsubAsignaciones = null; let unsubBancoRegistry = null; let unsubTienda = null; let buzonInterval = null; let countdownInterval = null;
 let faseActual = "Tranquila";
 let isRegisterMode = false;
 
@@ -34,14 +34,10 @@ function obtenerFechaDeHoy() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// ACTUALIZADO PARA FASE 3: Reclama su misión y deja el registro en El Banco
 window.reclamarRecompensa = async function(missionId, amount) {
   const btn = document.getElementById(`btn-reclamar-${missionId}`);
-  btn.disabled = true;
-  btn.textContent = "Reclamando...";
-  
-  const today = obtenerFechaDeHoy();
-  const claimKey = `${today}_${missionId}`;
+  btn.disabled = true; btn.textContent = "Reclamando...";
+  const today = obtenerFechaDeHoy(); const claimKey = `${today}_${missionId}`;
   
   try {
     await db.collection('users').doc(auth.currentUser.uid).update({
@@ -49,18 +45,112 @@ window.reclamarRecompensa = async function(missionId, amount) {
       [`reclamaciones.${claimKey}`]: true
     });
     
-    // Anotar en el Banco Público (FASE 3)
     let motivo = missionId === 'bono' ? "por su Bono Diario" : "por misión del Buzón";
     await db.collection('banco').add({
       texto: `❄️ ${myUserName} ganó ${amount} copos ${motivo}.`,
       timestamp: firebase.firestore.FieldValue.serverTimestamp()
     });
-    
   } catch (e) {
-    alert("Hubo un problema al reclamar la misión (¿Quizás ya la habías reclamado?). " + e.message);
-    btn.disabled = false;
-    btn.textContent = "Reclamar";
+    alert("Hubo un problema al reclamar la misión. " + e.message);
+    btn.disabled = false; btn.textContent = "Reclamar";
   }
+};
+
+// COMPRA EN LA TIENDA DE LA RESURRECCIÓN (FASE 4)
+window.comprarItemTienda = async function(itemId, precioActual, nombreItem) {
+    if (myCurrentCopos < precioActual) {
+        alert(`No tienes suficientes copos de nieve. Necesitas ${precioActual}.`);
+        return;
+    }
+    
+    // Si compra Tótem y ya tiene 5
+    if (itemId === 'totem' && myCurrentTotems >= 5) {
+        alert("¡Ya tienes el máximo de vidas (5 Tótems)! Deja algo para los demás.");
+        return;
+    }
+
+    let targetUidRevive = null;
+    let targetNameRevive = null;
+
+    // Lógica especial de Cuchara: Elegir a quién revivir
+    if (itemId === 'cuchara') {
+        const usersSnap = await db.collection('users').get();
+        let caidos = [];
+        let listText = "Selecciona el número del caído que deseas revivir:\n\n";
+        let i = 1;
+        usersSnap.forEach(doc => {
+            if (doc.data().totems <= 0) {
+                caidos.push({ id: doc.id, name: doc.data().name });
+                listText += `${i}. ${doc.data().name}\n`;
+                i++;
+            }
+        });
+        
+        if (caidos.length === 0) {
+            alert("No hay nadie caído (0 tótems) en este momento para revivir.");
+            return;
+        }
+        
+        const seleccion = prompt(listText);
+        if(!seleccion) return;
+        const elegido = caidos[parseInt(seleccion, 10) - 1];
+        if(!elegido) return alert("Selección inválida.");
+        targetUidRevive = elegido.id;
+        targetNameRevive = elegido.name;
+    }
+
+    if(!confirm(`¿Seguro que deseas gastar ${precioActual} copos en [${nombreItem}]?`)) return;
+
+    try {
+        await db.runTransaction(async (transaction) => {
+            const tiendaRef = db.collection('settings').doc('tienda');
+            const userRef = db.collection('users').doc(auth.currentUser.uid);
+            
+            const tiendaDoc = await transaction.get(tiendaRef);
+            const userDoc = await transaction.get(userRef);
+            
+            if (!tiendaDoc.exists) throw "La tienda no está disponible.";
+            const dataTienda = tiendaDoc.data();
+            const infoItem = dataTienda[itemId];
+            
+            if (infoItem.stock <= 0) throw "El objeto está agotado.";
+            if (userDoc.data().copos < infoItem.precio) throw "Fondos insuficientes al verificar.";
+
+            // 1. Cobrar y aumentar precio por inflación (+5 copos), descontar stock (-1)
+            let updatesTienda = {};
+            updatesTienda[`${itemId}.stock`] = infoItem.stock - 1;
+            updatesTienda[`${itemId}.precio`] = infoItem.precio + 5;
+            transaction.update(tiendaRef, updatesTienda);
+            
+            // 2. Descontar dinero al comprador y entregar item
+            let updatesUser = { copos: userDoc.data().copos - infoItem.precio };
+            if (itemId === 'totem') updatesUser.totems = userDoc.data().totems + 1;
+            if (itemId === 'escudo') updatesUser.escudos = (userDoc.data().escudos || 0) + 1;
+            if (itemId === 'comodin') updatesUser.comodines = (userDoc.data().comodines || 0) + 1;
+            transaction.update(userRef, updatesUser);
+
+            // 3. Entregar vida si es cuchara
+            if (itemId === 'cuchara' && targetUidRevive) {
+                const targetRef = db.collection('users').doc(targetUidRevive);
+                transaction.update(targetRef, { totems: 1, estado: 'Vivo' });
+            }
+            
+            return infoItem.precio;
+        });
+
+        // Registrar en el banco fuera de la transacción
+        let msjBanco = `🛒 ${myUserName} compró [${nombreItem}] por ${precioActual} copos.`;
+        if (itemId === 'cuchara') msjBanco += ` ¡Y revivió a ${targetNameRevive}! 🥄✨`;
+        
+        await db.collection('banco').add({
+          texto: msjBanco, timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        
+        alert("¡Compra exitosa! Revisa tu inventario o el banco.");
+
+    } catch(err) {
+        alert("Error en la compra: " + err);
+    }
 };
 
 function detenerEscuchas() {
@@ -72,6 +162,7 @@ function detenerEscuchas() {
   if (unsubUsers) unsubUsers(); 
   if (unsubBuzon) unsubBuzon();
   if (unsubBancoRegistry) unsubBancoRegistry();
+  if (unsubTienda) unsubTienda();
   if (unsubAsignaciones) { unsubAsignaciones(); unsubAsignaciones = null; }
   if (buzonInterval) clearInterval(buzonInterval); 
   if (countdownInterval) clearInterval(countdownInterval);
@@ -92,56 +183,26 @@ async function sortearAmigos() {
   if(!isAdmin) return;
   const usersSnap = await db.collection('users').get();
   let uids = []; let todosConCarta = true;
-  usersSnap.forEach(doc => {
-      uids.push(doc.id);
-      if(!doc.data().preferences) todosConCarta = false;
-  });
-  
-  if(!todosConCarta) { alert("No todos han llenado su carta. No se puede sortear aún."); return; }
-
-  const confirmacion = prompt("Esta acción borrará asignaciones anteriores respetando exclusiones. Escribe CONFIRMAR para continuar:");
-  if (confirmacion !== "CONFIRMAR") {
-    alert("Sorteo cancelado.");
-    return;
-  }
+  usersSnap.forEach(doc => { uids.push(doc.id); if(!doc.data().preferences) todosConCarta = false; });
+  if(!todosConCarta) return alert("No todos han llenado su carta.");
+  if (prompt("Escribe CONFIRMAR para sortear:") !== "CONFIRMAR") return alert("Cancelado.");
 
   const exclSnap = await db.collection('settings').doc('exclusiones').get();
   let exclusionesLista = (exclSnap.exists && exclSnap.data().lista) ? exclSnap.data().lista : [];
-
-  let shuffled = [...uids];
-  let esValido = false;
-  let intentos = 0;
+  let shuffled = [...uids]; let esValido = false; let intentos = 0;
 
   while (!esValido && intentos < 1000) {
     intentos++;
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-
+    for (let i = shuffled.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]; }
     esValido = true;
     for (let i = 0; i < shuffled.length; i++) {
-      let usuarioOrigen = shuffled[i];
-      let usuarioAsignado = shuffled[(i + 1) % shuffled.length];
-      
-      const tieneExclusion = exclusionesLista.some(ex => ex.origenId === usuarioOrigen && ex.prohibidoId === usuarioAsignado);
-      if (tieneExclusion) {
-        esValido = false;
-        break;
-      }
+      let origen = shuffled[i]; let asignado = shuffled[(i + 1) % shuffled.length];
+      if (exclusionesLista.some(ex => ex.origenId === origen && ex.prohibidoId === asignado)) { esValido = false; break; }
     }
   }
 
-  for(let i=0; i<shuffled.length; i++) {
-    let asig = shuffled[(i+1)%shuffled.length];
-    await db.collection('asignaciones').doc(shuffled[i]).set({ assignedTo: asig });
-  }
-
-  if (!esValido) {
-    alert("Sorteo completado. (Nota: Por la cantidad de exclusiones configuradas no fue posible evitar todas las parejas).");
-  } else {
-    alert("¡Sorteo Mágico completado con éxito respetando todas las exclusiones!");
-  }
+  for(let i=0; i<shuffled.length; i++) await db.collection('asignaciones').doc(shuffled[i]).set({ assignedTo: shuffled[(i+1)%shuffled.length] });
+  alert(!esValido ? "Sorteo completado con fallos en exclusiones." : "Sorteo completado con éxito.");
 }
 
 async function signOutApp() {
@@ -154,10 +215,7 @@ async function signOutApp() {
   document.getElementById('no-draw-message').classList.remove('hidden');
   
   const spanName = document.getElementById('assigned-friend-name');
-  if(spanName) {
-    spanName.textContent = "---";
-    spanName.classList.remove('revealed');
-  }
+  if(spanName) { spanName.textContent = "---"; spanName.classList.remove('revealed'); }
   document.getElementById('friend-regalo').textContent = "-";
   document.getElementById('friend-comida').textContent = "-";
   document.getElementById('welcome-user').textContent = "¡Hola! 👋";
@@ -165,8 +223,9 @@ async function signOutApp() {
   document.getElementById('user-copos').textContent = "--";
   document.getElementById('user-totems').textContent = "--";
   document.getElementById('user-estado').textContent = "Vivo";
-  document.getElementById('user-estado').style.color = "inherit";
   document.getElementById('user-equipo').textContent = "Sin Equipo";
+  document.getElementById('user-escudos').textContent = "0";
+  document.getElementById('user-comodines').textContent = "0";
 
   document.getElementById('preferences-screen').classList.add('hidden');
   document.getElementById('dashboard-screen').classList.add('hidden');
@@ -178,15 +237,12 @@ async function signOutApp() {
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('auth-form').addEventListener('submit', (e) => {
     e.preventDefault();
-    const email = document.getElementById('email').value;
-    const password = document.getElementById('password').value;
-    if (isRegisterMode) register(email, password, document.getElementById('name').value);
-    else login(email, password);
+    if (isRegisterMode) register(document.getElementById('email').value, document.getElementById('password').value, document.getElementById('name').value);
+    else login(document.getElementById('email').value, document.getElementById('password').value);
   });
 
   document.getElementById('toggle-auth').addEventListener('click', (e) => {
-    e.preventDefault();
-    isRegisterMode = !isRegisterMode;
+    e.preventDefault(); isRegisterMode = !isRegisterMode;
     document.getElementById('name-group').classList.toggle('hidden', !isRegisterMode);
     document.getElementById('auth-btn').textContent = isRegisterMode ? 'Registrarme 🎄' : 'Iniciar Sesión 🎄';
     e.target.textContent = isRegisterMode ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate';
@@ -194,8 +250,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('forgot-password').addEventListener('click', async (e) => {
     e.preventDefault();
-    const email = prompt("Ingresa tu correo para restablecer la contraseña:");
-    if(email) { try { await auth.sendPasswordResetEmail(email); alert("Correo de restablecimiento enviado."); } catch(err) { alert(err.message); } }
+    const email = prompt("Ingresa tu correo:");
+    if(email) { try { await auth.sendPasswordResetEmail(email); alert("Enviado."); } catch(err) { alert(err.message); } }
   });
 
   document.getElementById('preferences-form').addEventListener('submit', (e) => {
@@ -215,12 +271,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('edit-pref-btn').addEventListener('click', prepareEditPref);
   document.getElementById('edit-pref-btn-drawn').addEventListener('click', prepareEditPref);
-
-  document.getElementById('cancel-edit-btn').addEventListener('click', () => {
-    document.getElementById('preferences-screen').classList.add('hidden');
-    document.getElementById('dashboard-screen').classList.remove('hidden');
-  });
-
+  document.getElementById('cancel-edit-btn').addEventListener('click', () => { document.getElementById('preferences-screen').classList.add('hidden'); document.getElementById('dashboard-screen').classList.remove('hidden'); });
   document.getElementById('logout-btn').addEventListener('click', signOutApp);
   document.getElementById('draw-btn').addEventListener('click', sortearAmigos);
 
@@ -237,13 +288,12 @@ auth.onAuthStateChanged(async (user) => {
   if (user) {
     isAdmin = (user.email === "brayanochoaj10@gmail.com");
     document.getElementById('auth-screen').classList.add('hidden');
-    
     let docRef = db.collection('users').doc(user.uid);
     let doc = await docRef.get();
     
     if(!doc.exists) {
         let n = isRegisterMode ? document.getElementById('name').value : "Nuevo Usuario";
-        await docRef.set({ name: n, email: user.email, copos: 40, totems: 3, estado: 'Vivo', reclamaciones: {}, equipo: 'Sin Equipo' });
+        await docRef.set({ name: n, email: user.email, copos: 40, totems: 3, estado: 'Vivo', reclamaciones: {}, equipo: 'Sin Equipo', escudos: 0, comodines: 0 });
         doc = await docRef.get();
     }
 
@@ -256,60 +306,75 @@ auth.onAuthStateChanged(async (user) => {
   }
 });
 
-function calcularFasePorFecha() {
-  const dias = Math.floor((fechaCena - Date.now()) / 86400000);
-  if(dias > 30) return "Tranquila"; else if(dias > 15) return "Picante"; else if(dias > 7) return "Caos"; else return "Semana Revil";
-}
-
 function setupDashboard(uid) {
   detenerEscuchas();
-  
   document.getElementById('preferences-screen').classList.add('hidden'); 
   document.getElementById('dashboard-screen').classList.remove('hidden');
-  
   if (isAdmin) setupAdminPanel();
 
   unsubMyUser = db.collection('users').doc(uid).onSnapshot(userDoc => {
     if(userDoc.exists) {
       const data = userDoc.data();
-      if(data.name) {
-        const primerNombre = data.name.split(' ')[0];
-        myUserName = primerNombre; // Guardamos para el banco
-        document.getElementById('welcome-user').textContent = `¡Hola, ${primerNombre}! 👋`;
-      }
+      myUserName = data.name ? data.name.split(' ')[0] : "Elfo";
+      myCurrentCopos = data.copos || 0;
+      myCurrentTotems = data.totems || 0;
       
-      const coposVal = data.copos !== undefined ? data.copos : 40;
-      const totemsVal = data.totems !== undefined ? data.totems : 3;
-      document.getElementById('user-copos').textContent = coposVal;
-      document.getElementById('user-totems').textContent = totemsVal;
-      document.getElementById('user-equipo').textContent = data.equipo || "Sin Equipo"; // Equipo Fase 3
+      document.getElementById('welcome-user').textContent = `¡Hola, ${myUserName}! 👋`;
+      document.getElementById('user-copos').textContent = myCurrentCopos;
+      document.getElementById('user-totems').textContent = myCurrentTotems;
+      document.getElementById('user-equipo').textContent = data.equipo || "Sin Equipo";
+      document.getElementById('user-escudos').textContent = data.escudos || "0";
+      document.getElementById('user-comodines').textContent = data.comodines || "0";
       
       const estadoSpan = document.getElementById('user-estado');
-      if(totemsVal <= 0) {
-          estadoSpan.textContent = "Caído 💀";
-          estadoSpan.style.color = "#c71f37";
-      } else {
-          estadoSpan.textContent = data.estado || "Vivo";
-          estadoSpan.style.color = "inherit";
-      }
+      if(myCurrentTotems <= 0) { estadoSpan.textContent = "Caído 💀"; estadoSpan.style.color = "#c71f37"; } 
+      else { estadoSpan.textContent = data.estado || "Vivo"; estadoSpan.style.color = "inherit"; }
 
-      const today = obtenerFechaDeHoy();
-      const reclamaciones = data.reclamaciones || {};
-      
+      const today = obtenerFechaDeHoy(); const reclamaciones = data.reclamaciones || {};
       const btnBono = document.getElementById('btn-reclamar-bono');
-      if(reclamaciones[`${today}_bono`]) {
-        btnBono.disabled = true; btnBono.textContent = "✅ Listo";
-      } else {
-        btnBono.disabled = false; btnBono.textContent = "Reclamar";
-      }
-
+      if(reclamaciones[`${today}_bono`]) { btnBono.disabled = true; btnBono.textContent = "✅ Listo"; } else { btnBono.disabled = false; btnBono.textContent = "Reclamar"; }
       const btnBuzon = document.getElementById('btn-reclamar-buzon');
-      if(reclamaciones[`${today}_buzon`]) {
-        btnBuzon.disabled = true; btnBuzon.textContent = "✅ Listo";
-      } else {
-        btnBuzon.disabled = false; btnBuzon.textContent = "Reclamar";
-      }
+      if(reclamaciones[`${today}_buzon`]) { btnBuzon.disabled = true; btnBuzon.textContent = "✅ Listo"; } else { btnBuzon.disabled = false; btnBuzon.textContent = "Reclamar"; }
     }
+  });
+
+  // RENDERIZAR TIENDA (FASE 4)
+  unsubTienda = db.collection('settings').doc('tienda').onSnapshot(doc => {
+      const grid = document.getElementById('tienda-grid');
+      grid.innerHTML = "";
+      if(!doc.exists) { grid.innerHTML = "<p>Tienda cerrada.</p>"; return; }
+      
+      const items = doc.data();
+      const catalog = [
+          { id: 'escudo', icon: '🛡️', desc: 'Te protege automáticamente del próximo castigo Revil.' },
+          { id: 'comodin', icon: '🃏', desc: 'Úsalo para saltarte un reto en vivo.' },
+          { id: 'totem', icon: '🗿', desc: '+1 Vida extra. Límite máximo: 5 tótems por persona.' },
+          { id: 'cuchara', icon: '🥄', desc: 'Resurrección. Compra esto para revivir a un amigo caído (Vuelve con 1 tótem).' }
+      ];
+
+      catalog.forEach(cat => {
+          if(!items[cat.id]) return;
+          const data = items[cat.id];
+          const div = document.createElement('div');
+          div.className = 'item-card';
+          
+          let btnHtml = '';
+          if (data.stock > 0) {
+              btnHtml = `<button class="btn-small" style="background:#ffbe0b; color:black; font-weight:bold; margin-top:5px;" onclick="comprarItemTienda('${cat.id}', ${data.precio}, '${data.nombre}')">Comprar</button>`;
+          } else {
+              btnHtml = `<button class="btn-small" disabled style="margin-top:5px;">Agotado</button>`;
+          }
+
+          div.innerHTML = `
+            <div class="item-icon">${cat.icon}</div>
+            <div class="item-name">${data.nombre}</div>
+            <div class="item-desc">${cat.desc}</div>
+            <div class="item-price">Precio: ${data.precio} ❄️</div>
+            <div class="item-stock">Quedan: ${data.stock} ud.</div>
+            ${btnHtml}
+          `;
+          grid.appendChild(div);
+      });
   });
 
   countdownInterval = setInterval(() => {
@@ -324,23 +389,17 @@ function setupDashboard(uid) {
       myAssignedFriendId = asigDoc.data().assignedTo;
       document.getElementById('no-draw-message').classList.add('hidden'); 
       document.getElementById('draw-result').classList.remove('hidden');
-      
       const friendDoc = await db.collection('users').doc(myAssignedFriendId).get();
       if(friendDoc.exists) {
-        const friendData = friendDoc.data();
-        document.getElementById('assigned-friend-name').textContent = friendData.name || "Amigo Secreto";
-        document.getElementById('friend-regalo').textContent = (friendData.preferences && friendData.preferences.regalo) ? friendData.preferences.regalo : "Aún no ha llenado su carta."; 
-        document.getElementById('friend-comida').textContent = (friendData.preferences && friendData.preferences.comida) ? friendData.preferences.comida : "Pendiente.";
+        document.getElementById('assigned-friend-name').textContent = friendDoc.data().name || "Amigo Secreto";
+        document.getElementById('friend-regalo').textContent = (friendDoc.data().preferences && friendDoc.data().preferences.regalo) ? friendDoc.data().preferences.regalo : "Aún no ha llenado su carta."; 
+        document.getElementById('friend-comida').textContent = (friendDoc.data().preferences && friendDoc.data().preferences.comida) ? friendDoc.data().preferences.comida : "Pendiente.";
       }
     } else {
       myAssignedFriendId = null;
       document.getElementById('draw-result').classList.add('hidden'); 
       document.getElementById('no-draw-message').classList.remove('hidden');
-      const spanName = document.getElementById('assigned-friend-name');
-      if(spanName) {
-        spanName.textContent = "---";
-        spanName.classList.remove('revealed');
-      }
+      document.getElementById('assigned-friend-name').textContent = "---";
       document.getElementById('friend-regalo').textContent = "-";
       document.getElementById('friend-comida').textContent = "-";
     }
@@ -352,17 +411,14 @@ function setupDashboard(uid) {
       faseActual = (data.faseForzada && data.faseForzada !== "auto") ? data.faseForzada : calcularFasePorFecha();
       if(data.multiplicadores) configFases = data.multiplicadores;
       if(isAdmin) { document.getElementById('select-fase-admin').value = data.faseForzada ? data.faseForzada : "auto"; renderMultiplicadoresAdmin(); }
-    } else {
-      faseActual = calcularFasePorFecha();
-    }
+    } else { faseActual = calcularFasePorFecha(); }
     document.getElementById('fase-actual-display').textContent = `Fase Actual: ${faseActual}`;
   });
 
   unsubEventos = db.collection('settings').doc('eventos').onSnapshot(doc => {
     if(doc.exists && doc.data().lista) eventosCatalogo = doc.data().lista;
     else { eventosCatalogo = eventosPorDefecto; if(isAdmin) db.collection('settings').doc('eventos').set({ lista: eventosCatalogo }); }
-    if(isAdmin) renderTablaEventos();
-    evaluarEventoGlobalExistente();
+    if(isAdmin) renderTablaEventos(); evaluarEventoGlobalExistente();
   });
 
   unsubGlobal = db.collection('settings').doc('ruletaGlobal').onSnapshot(async (docSnap) => {
@@ -370,54 +426,28 @@ function setupDashboard(uid) {
         document.getElementById('estado-evento-actual').textContent = "Sin eventos activos.";
         document.getElementById('active-event-info').classList.add('hidden');
         document.getElementById('no-active-event-msg').classList.remove('hidden');
-        EffectsEngine.limpiar(); 
-        document.getElementById('admin-banner').classList.add('hidden');
-        return; 
+        EffectsEngine.limpiar(); document.getElementById('admin-banner').classList.add('hidden'); return; 
     }
     evaluarEventoGlobalExistente(docSnap);
   });
 
-  // ESCUCHA DEL BANCO (FASE 3)
   unsubBancoRegistry = db.collection('banco').orderBy('timestamp', 'desc').limit(10).onSnapshot(snap => {
-    const list = document.getElementById('banco-list'); 
-    list.innerHTML = "";
-    if(snap.empty) {
-      list.innerHTML = `<div style="text-align: center; color: #888; font-size: 0.85rem; padding: 10px;">El banco está vacío.</div>`;
-      return;
-    }
+    const list = document.getElementById('banco-list'); list.innerHTML = "";
+    if(snap.empty) { list.innerHTML = `<div style="text-align: center; color: #888; font-size: 0.85rem; padding: 10px;">El banco está vacío.</div>`; return; }
     snap.forEach(doc => {
-      const data = doc.data();
-      const dateStr = data.timestamp ? new Date(data.timestamp.toDate()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "Ahora";
-      const d = document.createElement('div');
-      d.style.cssText = "padding: 8px; border-bottom: 1px dashed #bbdefb; color: #333; font-size: 0.85rem;";
-      d.innerHTML = `<span style="color:#1565c0; font-weight:bold;">[${dateStr}]</span> ${data.texto}`;
-      list.appendChild(d);
+      const data = doc.data(); const dateStr = data.timestamp ? new Date(data.timestamp.toDate()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "Ahora";
+      const d = document.createElement('div'); d.style.cssText = "padding: 8px; border-bottom: 1px dashed #bbdefb; color: #333; font-size: 0.85rem;";
+      d.innerHTML = `<span style="color:#1565c0; font-weight:bold;">[${dateStr}]</span> ${data.texto}`; list.appendChild(d);
     });
   });
 
   unsubHistorial = db.collection('historial_ruleta').orderBy('timestamp', 'desc').limit(5).onSnapshot(snap => {
     const list = document.getElementById('history-list'); list.innerHTML = "";
     snap.forEach(doc => {
-      const data = doc.data();
-      const dateStr = data.timestamp ? new Date(data.timestamp.toDate()).toLocaleDateString() : "Reciente";
-      
-      const d = document.createElement('div'); 
-      d.style.cssText = "padding: 8px; border-bottom: 1px dotted rgba(255,255,255,0.2); margin-bottom: 5px;";
-      
-      const title = document.createElement('strong'); 
-      title.textContent = `🎲 ${dateStr}: [${data.eventoTitulo}]`; 
-      title.style.color = "#ffbe0b";
-      d.appendChild(title);
-      
-      if(data.eventoTexto) {
-          const desc = document.createElement('div'); 
-          desc.textContent = data.eventoTexto; 
-          desc.style.marginTop = "4px"; 
-          desc.style.fontSize = "0.75rem"; 
-          desc.style.color = "#ddd";
-          d.appendChild(desc);
-      }
-      
+      const data = doc.data(); const dateStr = data.timestamp ? new Date(data.timestamp.toDate()).toLocaleDateString() : "Reciente";
+      const d = document.createElement('div'); d.style.cssText = "padding: 8px; border-bottom: 1px dotted rgba(255,255,255,0.2); margin-bottom: 5px;";
+      d.innerHTML = `<strong style="color:#ffbe0b;">🎲 ${dateStr}: [${data.eventoTitulo}]</strong>`;
+      if(data.eventoTexto) d.innerHTML += `<div style="margin-top:4px; font-size:0.75rem; color:#ddd;">${data.eventoTexto}</div>`;
       list.appendChild(d);
     });
   });
@@ -427,8 +457,7 @@ function setupDashboard(uid) {
     snap.forEach(doc => {
       const d = document.createElement('div');
       d.style.cssText = "padding: 8px; border-bottom: 1px solid #ddd; background: #fff; margin-bottom: 5px; border-radius: 5px; color: #333;";
-      d.textContent = `🕵️: ${doc.data().texto}`;
-      list.appendChild(d);
+      d.textContent = `🕵️: ${doc.data().texto}`; list.appendChild(d);
     });
   });
 
@@ -436,7 +465,6 @@ function setupDashboard(uid) {
   buzonInterval = setInterval(() => {
     const btn = document.getElementById('send-msg-btn');
     if(Math.random() > 0.8) btn.classList.add('zumbido'); else btn.classList.remove('zumbido');
-    
     if(Math.random() > 0.95 && currentActiveEffect !== "apagon") {
         const texts = ["¿Estás seguro?", "Alguien te vigila...", "Ese regalo no le gustará", "Jo Jo Jo"];
         const oldText = document.getElementById('welcome-user').textContent;
@@ -447,11 +475,7 @@ function setupDashboard(uid) {
 }
 
 async function evaluarEventoGlobalExistente(docSnap = null) {
-    if(!docSnap) {
-        const snap = await db.collection('settings').doc('ruletaGlobal').get();
-        if(!snap.exists) return;
-        docSnap = snap;
-    }
+    if(!docSnap) { const snap = await db.collection('settings').doc('ruletaGlobal').get(); if(!snap.exists) return; docSnap = snap; }
     const globalData = docSnap.data();
     if(Date.now() > (globalData.expiresAt ? globalData.expiresAt.toMillis() : 0)) {
       document.getElementById('estado-evento-actual').textContent = "El evento expiró."; 
@@ -460,8 +484,7 @@ async function evaluarEventoGlobalExistente(docSnap = null) {
       EffectsEngine.limpiar(); document.getElementById('admin-banner').classList.add('hidden'); return;
     }
     
-    const ev = eventosCatalogo.find(e => e.id === globalData.eventId);
-    if(!ev) return;
+    const ev = eventosCatalogo.find(e => e.id === globalData.eventId); if(!ev) return;
     
     document.getElementById('active-event-info').classList.remove('hidden');
     document.getElementById('no-active-event-msg').classList.add('hidden');
@@ -470,38 +493,22 @@ async function evaluarEventoGlobalExistente(docSnap = null) {
     document.getElementById('active-event-family').textContent = ev.familia;
     document.getElementById('active-event-family').style.backgroundColor = ev.color;
     document.getElementById('active-event-expires').textContent = `Expira: ${globalData.expiresAt ? new Date(globalData.expiresAt.toMillis()).toLocaleString() : "Desconocida"}`;
-    
-    document.getElementById('btn-replay-roulette').onclick = () => {
-      ejecutarEscenaEntrada(globalData.targetAngle, ev, 'roulette-modal', 'roulette-canvas', false, globalData.segmentos);
-    };
+    document.getElementById('btn-replay-roulette').onclick = () => { ejecutarEscenaEntrada(globalData.targetAngle, ev, 'roulette-modal', 'roulette-canvas', false, globalData.segmentos); };
 
     const divEstado = document.getElementById('estado-evento-actual');
-    divEstado.textContent = `🔥 ACTIVO: ${ev.titulo}`;
-    divEstado.style.color = ev.color;
-
-    if(globalData.anuncioAdmin) {
-        const banner = document.getElementById('admin-banner');
-        banner.textContent = globalData.anuncioAdmin;
-        banner.classList.remove('hidden');
-    } else {
-        document.getElementById('admin-banner').classList.add('hidden');
-    }
+    divEstado.textContent = `🔥 ACTIVO: ${ev.titulo}`; divEstado.style.color = ev.color;
+    if(globalData.anuncioAdmin) { document.getElementById('admin-banner').textContent = globalData.anuncioAdmin; document.getElementById('admin-banner').classList.remove('hidden'); } 
+    else { document.getElementById('admin-banner').classList.add('hidden'); }
 
     const myUserRef = db.collection('users').doc(auth.currentUser.uid);
     const myUserData = (await myUserRef.get()).data();
 
     if(myUserData.ultimoEventoVisto !== globalData.uuid_giro) {
       await myUserRef.update({ ultimoEventoVisto: globalData.uuid_giro });
-      
-      const overlay = document.getElementById('audio-overlay');
-      overlay.classList.remove('hidden');
-      
-      const btnStart = document.getElementById('btn-start-scene');
-      btnStart.onclick = () => {
-         overlay.classList.add('hidden');
+      document.getElementById('audio-overlay').classList.remove('hidden');
+      document.getElementById('btn-start-scene').onclick = () => {
+         document.getElementById('audio-overlay').classList.add('hidden');
          ejecutarEscenaEntrada(globalData.targetAngle, ev, 'roulette-modal', 'roulette-canvas', false, globalData.segmentos);
       };
-    } else if(currentActiveEffect !== ev.efectoVisual) {
-      EffectsEngine.activate(ev.efectoVisual);
-    }
+    } else if(currentActiveEffect !== ev.efectoVisual) { EffectsEngine.activate(ev.efectoVisual); }
 }
