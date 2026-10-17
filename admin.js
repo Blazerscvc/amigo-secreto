@@ -1,5 +1,19 @@
 let modoJugadorActivo = false;
 
+// FUNCIÓN DE CÁLCULO DE FASE POR FECHA
+function calcularFasePorFecha() {
+  const hoy = new Date();
+  const mes = hoy.getMonth(); // Noviembre es mes 10 (indexado en 0)
+  const dia = hoy.getDate();
+
+  // Progresión automática según se acerca la fecha de la cena
+  if (mes === 10 && dia >= 21) return "Semana Revil";
+  if (mes === 10 && dia >= 14) return "Caos";
+  if (mes === 10 && dia >= 7) return "Picante";
+
+  return "Tranquila";
+}
+
 window.toggleModoJugador = function() {
   modoJugadorActivo = !modoJugadorActivo;
   if (modoJugadorActivo) {
@@ -248,22 +262,16 @@ window.terminarEventoGlobal = async function() {
   if(prompt("Escribe CONFIRMAR para terminar:") === "CONFIRMAR") { await db.collection('settings').doc('ruletaGlobal').delete(); EffectsEngine.limpiar(); alert("Finalizado."); }
 };
 
-// FUNCIÓN CORREGIDA Y CON MANEJO DE ERRORES COMPLETO
+// GIRO DE RULETA GLOBAL
 window.iniciarGiroAdmin = async function() {
-  // 1. Diagnóstico de Administrador
-  if (!auth.currentUser) {
-    return alert("❌ No hay ninguna sesión activa.");
-  }
-  
+  if (!auth.currentUser) return alert("❌ No hay ninguna sesión activa.");
   if (!isAdmin && auth.currentUser.email !== "brayanochoaj10@gmail.com") {
-    return alert(`❌ Sesión actual (${auth.currentUser.email}) no coincide con el administrador autorizado.`);
+    return alert(`❌ La sesión actual (${auth.currentUser.email}) no es el admin.`);
   }
 
-  // Forzamos la bandera a true si el correo coincide
   isAdmin = true;
 
   try {
-    // 2. Verificación del catálogo de eventos
     let evActivos = eventosCatalogo.filter(e => e.activo);
     
     if (evActivos.length === 0) {
@@ -275,11 +283,12 @@ window.iniciarGiroAdmin = async function() {
     }
 
     if (evActivos.length === 0) {
-      return alert("⚠️ No hay eventos activos en memoria. Haz clic en '🔄 Sincronizar eventos base' primero.");
+      return alert("⚠️ No hay eventos activos. Pulsa primero '🔄 Sincronizar eventos base'.");
     }
     
-    // 3. Cálculo de fase y ponderación
-    faseActual = typeof calcularFasePorFecha === 'function' ? calcularFasePorFecha() : "Tranquila"; 
+    // Evaluación segura de la fase
+    faseActual = (typeof calcularFasePorFecha === 'function') ? calcularFasePorFecha() : "Tranquila"; 
+    
     const docFases = await db.collection('settings').doc('fases').get();
     if (docFases.exists && docFases.data().faseForzada && docFases.data().faseForzada !== "auto") {
       faseActual = docFases.data().faseForzada;
@@ -294,11 +303,8 @@ window.iniciarGiroAdmin = async function() {
       return { ...ev, pesoCalculado: pesoAjustado }; 
     });
 
-    if (totalPeso <= 0) {
-      return alert("⚠️ El peso total de los eventos es 0. Revisa las configuraciones de fase.");
-    }
+    if (totalPeso <= 0) return alert("⚠️ El peso total calculado es 0.");
 
-    // 4. Selección aleatoria
     let random = Math.random() * totalPeso; 
     let evElegido = eventosConPeso[0];
     for (let i = 0; i < eventosConPeso.length; i++) { 
@@ -309,7 +315,6 @@ window.iniciarGiroAdmin = async function() {
       random -= eventosConPeso[i].pesoCalculado; 
     }
     
-    // 5. Generar segmentos para la ruleta
     let segmentosGiro = [{ id: evElegido.id, titulo: evElegido.titulo, color: evElegido.color }]; 
     let posiblesSenuelos = eventosConPeso.filter(e => e.id !== evElegido.id);
     
@@ -332,10 +337,9 @@ window.iniciarGiroAdmin = async function() {
     const elegIndex = segmentosGiro.findIndex(s => s.id === evElegido.id);
     const targetAngle = (3 * Math.PI / 2) - ((elegIndex + 0.5) * (Math.PI * 2 / segmentosGiro.length));
 
-    const anuncio = prompt("¿Anuncio del Admin? (Opcional):"); 
+    const anuncio = prompt("¿Anuncio opcional del Admin para el banner?"); 
     const ts = firebase.firestore.FieldValue.serverTimestamp();
 
-    // 6. Escritura en Firestore
     await db.collection('settings').doc('ruletaGlobal').set({ 
       eventId: evElegido.id, 
       targetAngle: targetAngle, 
@@ -353,11 +357,10 @@ window.iniciarGiroAdmin = async function() {
       timestamp: ts 
     });
 
-    alert("🎉 ¡Ruleta activada con éxito para todos los usuarios!");
+    alert("🎉 ¡Giro ejecutado con éxito!");
 
   } catch (err) {
-    console.error("Error al girar la ruleta:", err);
-    alert("❌ Error de Firestore: " + err.message);
+    alert("❌ Error en Firestore: " + err.message);
   }
 };
 
@@ -401,7 +404,9 @@ window.abrirModoCena = function() {
     ctx.fillStyle = "white"; ctx.font = "bold 14px Poppins"; ctx.textAlign = "right"; ctx.fillText(eventosCenaEspeciales[i].titulo, radius - 20, 5); ctx.restore();
   }
 };
+
 window.cerrarModoCena = function() { document.getElementById('cena-screen').classList.add('hidden'); document.getElementById('app-wrapper').classList.remove('hidden'); document.getElementById('cena-resultado-box').classList.add('hidden'); };
+
 window.girarModoCena = function() {
   document.getElementById('btn-girar-cena').disabled = true; document.getElementById('cena-resultado-box').classList.add('hidden');
   const elegIndex = Math.floor(Math.random() * eventosCenaEspeciales.length); const evFinal = eventosCenaEspeciales[elegIndex];
