@@ -250,28 +250,39 @@ window.terminarEventoGlobal = async function() {
 
 // FUNCIÓN CORREGIDA Y CON MANEJO DE ERRORES COMPLETO
 window.iniciarGiroAdmin = async function() {
-  if(!isAdmin) return alert("❌ No tienes permisos de administrador (Verifica que iniciaste sesión con brayanochoaj10@gmail.com).");
+  // 1. Diagnóstico de Administrador
+  if (!auth.currentUser) {
+    return alert("❌ No hay ninguna sesión activa.");
+  }
   
+  if (!isAdmin && auth.currentUser.email !== "brayanochoaj10@gmail.com") {
+    return alert(`❌ Sesión actual (${auth.currentUser.email}) no coincide con el administrador autorizado.`);
+  }
+
+  // Forzamos la bandera a true si el correo coincide
+  isAdmin = true;
+
   try {
+    // 2. Verificación del catálogo de eventos
     let evActivos = eventosCatalogo.filter(e => e.activo);
     
-    // Si la lista local está vacía, intentamos cargar directamente de Firestore
-    if(evActivos.length === 0) {
+    if (evActivos.length === 0) {
       const snapEv = await db.collection('settings').doc('eventos').get();
-      if(snapEv.exists && snapEv.data().lista) {
+      if (snapEv.exists && snapEv.data().lista) {
         eventosCatalogo = snapEv.data().lista;
         evActivos = eventosCatalogo.filter(e => e.activo);
       }
     }
 
-    if(evActivos.length === 0) {
-      return alert("⚠️ No hay eventos activos disponibles. Por favor pulsa primero el botón '🔄 Sincronizar eventos base' dentro del editor de eventos.");
+    if (evActivos.length === 0) {
+      return alert("⚠️ No hay eventos activos en memoria. Haz clic en '🔄 Sincronizar eventos base' primero.");
     }
     
-    faseActual = calcularFasePorFecha(); 
+    // 3. Cálculo de fase y ponderación
+    faseActual = typeof calcularFasePorFecha === 'function' ? calcularFasePorFecha() : "Tranquila"; 
     const docFases = await db.collection('settings').doc('fases').get();
-    if(docFases.exists && docFases.data().faseForzada && docFases.data().faseForzada !== "auto") {
-        faseActual = docFases.data().faseForzada;
+    if (docFases.exists && docFases.data().faseForzada && docFases.data().faseForzada !== "auto") {
+      faseActual = docFases.data().faseForzada;
     }
 
     const mults = configFases[faseActual] || configFases["Tranquila"]; 
@@ -283,25 +294,33 @@ window.iniciarGiroAdmin = async function() {
       return { ...ev, pesoCalculado: pesoAjustado }; 
     });
 
-    if (totalPeso <= 0) return alert("⚠️ El peso total calculado es 0. Revisa los multiplicadores o pesos de los eventos.");
+    if (totalPeso <= 0) {
+      return alert("⚠️ El peso total de los eventos es 0. Revisa las configuraciones de fase.");
+    }
 
+    // 4. Selección aleatoria
     let random = Math.random() * totalPeso; 
     let evElegido = eventosConPeso[0];
-    for(let i = 0; i < eventosConPeso.length; i++) { 
-      if(random < eventosConPeso[i].pesoCalculado) { 
+    for (let i = 0; i < eventosConPeso.length; i++) { 
+      if (random < eventosConPeso[i].pesoCalculado) { 
         evElegido = eventosConPeso[i]; 
         break; 
       } 
       random -= eventosConPeso[i].pesoCalculado; 
     }
     
+    // 5. Generar segmentos para la ruleta
     let segmentosGiro = [{ id: evElegido.id, titulo: evElegido.titulo, color: evElegido.color }]; 
     let posiblesSenuelos = eventosConPeso.filter(e => e.id !== evElegido.id);
     
-    for(let i = 0; i < 7; i++) {
-      if(posiblesSenuelos.length === 0) break; 
+    for (let i = 0; i < 7; i++) {
+      if (posiblesSenuelos.length === 0) break; 
       let randIdx = Math.floor(Math.random() * posiblesSenuelos.length);
-      segmentosGiro.push({ id: posiblesSenuelos[randIdx].id, titulo: posiblesSenuelos[randIdx].titulo, color: posiblesSenuelos[randIdx].color }); 
+      segmentosGiro.push({ 
+        id: posiblesSenuelos[randIdx].id, 
+        titulo: posiblesSenuelos[randIdx].titulo, 
+        color: posiblesSenuelos[randIdx].color 
+      }); 
       posiblesSenuelos.splice(randIdx, 1);
     }
 
@@ -313,9 +332,10 @@ window.iniciarGiroAdmin = async function() {
     const elegIndex = segmentosGiro.findIndex(s => s.id === evElegido.id);
     const targetAngle = (3 * Math.PI / 2) - ((elegIndex + 0.5) * (Math.PI * 2 / segmentosGiro.length));
 
-    const anuncio = prompt("¿Anuncio opcional del Admin para el banner?"); 
+    const anuncio = prompt("¿Anuncio del Admin? (Opcional):"); 
     const ts = firebase.firestore.FieldValue.serverTimestamp();
 
+    // 6. Escritura en Firestore
     await db.collection('settings').doc('ruletaGlobal').set({ 
       eventId: evElegido.id, 
       targetAngle: targetAngle, 
@@ -333,9 +353,11 @@ window.iniciarGiroAdmin = async function() {
       timestamp: ts 
     });
 
-    alert("🎉 ¡Giro de Ruleta Global completado y publicado para todos los usuarios!");
-  } catch (e) {
-    alert("❌ Error al ejecutar el giro global: " + e.message);
+    alert("🎉 ¡Ruleta activada con éxito para todos los usuarios!");
+
+  } catch (err) {
+    console.error("Error al girar la ruleta:", err);
+    alert("❌ Error de Firestore: " + err.message);
   }
 };
 
