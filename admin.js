@@ -63,7 +63,6 @@ function setupAdminPanel() {
       actionsDiv.appendChild(btnEdit); actionsDiv.appendChild(btnAssign); actionsDiv.appendChild(btnDelete);
       topRow.appendChild(infoDiv); topRow.appendChild(actionsDiv);
       
-      // INVENTARIO Y ECONOMÍA EN EL PANEL ADMIN (FASE 4)
       const coposVal = u.copos !== undefined ? u.copos : 40;
       const totemsVal = u.totems !== undefined ? u.totems : 3;
       const escudosVal = u.escudos || 0;
@@ -165,7 +164,7 @@ window.limpiarExclusionesAdmin = async function() {
 };
 
 window.sincronizarEventosBase = async function() {
-  if (!isAdmin) return;
+  if (!isAdmin) return alert("❌ No eres Administrador.");
   try {
     const docSnap = await db.collection('settings').doc('eventos').get();
     let listaActual = (docSnap.exists && docSnap.data().lista) ? docSnap.data().lista : [...eventosCatalogo];
@@ -182,7 +181,7 @@ window.sincronizarEventosBase = async function() {
 
     await db.collection('settings').doc('eventos').set({ lista: listaActual }, { merge: true });
     alert(`¡Sincronizado! Nuevos: ${agregados} | Actualizados: ${actualizados}`);
-  } catch (e) { alert("Error: " + e.message); }
+  } catch (e) { alert("Error al sincronizar: " + e.message); }
 };
 window.cargarEventosBase = window.sincronizarEventosBase;
 
@@ -198,7 +197,7 @@ window.eliminarUsuarioAdmin = async function(uid, userName) {
 };
 
 window.sortearPersonaAdmin = async function() {
-  if(!isAdmin) return;
+  if(!isAdmin) return alert("❌ No eres Administrador.");
   try {
     const usersSnap = await db.collection('users').get(); if(usersSnap.empty) return alert("No hay usuarios.");
     const sorteosSnap = await db.collection('sorteos_persona').get(); const yaSorteadosIds = new Set();
@@ -249,37 +248,95 @@ window.terminarEventoGlobal = async function() {
   if(prompt("Escribe CONFIRMAR para terminar:") === "CONFIRMAR") { await db.collection('settings').doc('ruletaGlobal').delete(); EffectsEngine.limpiar(); alert("Finalizado."); }
 };
 
+// FUNCIÓN CORREGIDA Y CON MANEJO DE ERRORES COMPLETO
 window.iniciarGiroAdmin = async function() {
-  if(!isAdmin) return;
-  const evActivos = eventosCatalogo.filter(e => e.activo); if(evActivos.length === 0) return alert("No hay eventos activos.");
+  if(!isAdmin) return alert("❌ No tienes permisos de administrador (Verifica que iniciaste sesión con brayanochoaj10@gmail.com).");
   
-  faseActual = calcularFasePorFecha(); const docFases = await db.collection('settings').doc('fases').get();
-  if(docFases.exists && docFases.data().faseForzada && docFases.data().faseForzada !== "auto") faseActual = docFases.data().faseForzada;
+  try {
+    let evActivos = eventosCatalogo.filter(e => e.activo);
+    
+    // Si la lista local está vacía, intentamos cargar directamente de Firestore
+    if(evActivos.length === 0) {
+      const snapEv = await db.collection('settings').doc('eventos').get();
+      if(snapEv.exists && snapEv.data().lista) {
+        eventosCatalogo = snapEv.data().lista;
+        evActivos = eventosCatalogo.filter(e => e.activo);
+      }
+    }
 
-  const mults = configFases[faseActual] || configFases["Tranquila"]; let totalPeso = 0;
-  const eventosConPeso = evActivos.map(ev => { let m = mults[ev.familia] !== undefined ? mults[ev.familia] : 1; let pesoAjustado = ev.peso * m; totalPeso += pesoAjustado; return { ...ev, pesoCalculado: pesoAjustado }; });
+    if(evActivos.length === 0) {
+      return alert("⚠️ No hay eventos activos disponibles. Por favor pulsa primero el botón '🔄 Sincronizar eventos base' dentro del editor de eventos.");
+    }
+    
+    faseActual = calcularFasePorFecha(); 
+    const docFases = await db.collection('settings').doc('fases').get();
+    if(docFases.exists && docFases.data().faseForzada && docFases.data().faseForzada !== "auto") {
+        faseActual = docFases.data().faseForzada;
+    }
 
-  if (totalPeso <= 0) return alert("El peso total calculado es 0.");
+    const mults = configFases[faseActual] || configFases["Tranquila"]; 
+    let totalPeso = 0;
+    const eventosConPeso = evActivos.map(ev => { 
+      let m = mults[ev.familia] !== undefined ? mults[ev.familia] : 1; 
+      let pesoAjustado = ev.peso * m; 
+      totalPeso += pesoAjustado; 
+      return { ...ev, pesoCalculado: pesoAjustado }; 
+    });
 
-  let random = Math.random() * totalPeso; let evElegido = eventosConPeso[0];
-  for(let i = 0; i < eventosConPeso.length; i++) { if(random < eventosConPeso[i].pesoCalculado) { evElegido = eventosConPeso[i]; break; } random -= eventosConPeso[i].pesoCalculado; }
-  
-  let segmentosGiro = [{ id: evElegido.id, titulo: evElegido.titulo, color: evElegido.color }]; let posiblesSenuelos = eventosConPeso.filter(e => e.id !== evElegido.id);
-  
-  for(let i = 0; i < 7; i++) {
-    if(posiblesSenuelos.length === 0) break; let randIdx = Math.floor(Math.random() * posiblesSenuelos.length);
-    segmentosGiro.push({ id: posiblesSenuelos[randIdx].id, titulo: posiblesSenuelos[randIdx].titulo, color: posiblesSenuelos[randIdx].color }); posiblesSenuelos.splice(randIdx, 1);
+    if (totalPeso <= 0) return alert("⚠️ El peso total calculado es 0. Revisa los multiplicadores o pesos de los eventos.");
+
+    let random = Math.random() * totalPeso; 
+    let evElegido = eventosConPeso[0];
+    for(let i = 0; i < eventosConPeso.length; i++) { 
+      if(random < eventosConPeso[i].pesoCalculado) { 
+        evElegido = eventosConPeso[i]; 
+        break; 
+      } 
+      random -= eventosConPeso[i].pesoCalculado; 
+    }
+    
+    let segmentosGiro = [{ id: evElegido.id, titulo: evElegido.titulo, color: evElegido.color }]; 
+    let posiblesSenuelos = eventosConPeso.filter(e => e.id !== evElegido.id);
+    
+    for(let i = 0; i < 7; i++) {
+      if(posiblesSenuelos.length === 0) break; 
+      let randIdx = Math.floor(Math.random() * posiblesSenuelos.length);
+      segmentosGiro.push({ id: posiblesSenuelos[randIdx].id, titulo: posiblesSenuelos[randIdx].titulo, color: posiblesSenuelos[randIdx].color }); 
+      posiblesSenuelos.splice(randIdx, 1);
+    }
+
+    for (let i = segmentosGiro.length - 1; i > 0; i--) { 
+      const j = Math.floor(Math.random() * (i + 1)); 
+      [segmentosGiro[i], segmentosGiro[j]] = [segmentosGiro[j], segmentosGiro[i]]; 
+    }
+
+    const elegIndex = segmentosGiro.findIndex(s => s.id === evElegido.id);
+    const targetAngle = (3 * Math.PI / 2) - ((elegIndex + 0.5) * (Math.PI * 2 / segmentosGiro.length));
+
+    const anuncio = prompt("¿Anuncio opcional del Admin para el banner?"); 
+    const ts = firebase.firestore.FieldValue.serverTimestamp();
+
+    await db.collection('settings').doc('ruletaGlobal').set({ 
+      eventId: evElegido.id, 
+      targetAngle: targetAngle, 
+      uuid_giro: Math.random().toString(36).substring(2), 
+      timestamp: ts, 
+      expiresAt: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 172800000)), 
+      segmentos: segmentosGiro, 
+      anuncioAdmin: anuncio || null 
+    });
+
+    await db.collection('historial_ruleta').add({ 
+      eventoId: evElegido.id, 
+      eventoTitulo: evElegido.titulo, 
+      eventoTexto: evElegido.texto, 
+      timestamp: ts 
+    });
+
+    alert("🎉 ¡Giro de Ruleta Global completado y publicado para todos los usuarios!");
+  } catch (e) {
+    alert("❌ Error al ejecutar el giro global: " + e.message);
   }
-
-  for (let i = segmentosGiro.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [segmentosGiro[i], segmentosGiro[j]] = [segmentosGiro[j], segmentosGiro[i]]; }
-
-  const elegIndex = segmentosGiro.findIndex(s => s.id === evElegido.id);
-  const targetAngle = (3 * Math.PI / 2) - ((elegIndex + 0.5) * (Math.PI * 2 / segmentosGiro.length));
-
-  const anuncio = prompt("¿Anuncio del Admin? (Opcional)"); const ts = firebase.firestore.FieldValue.serverTimestamp();
-
-  await db.collection('settings').doc('ruletaGlobal').set({ eventId: evElegido.id, targetAngle: targetAngle, uuid_giro: Math.random().toString(36).substring(2), timestamp: ts, expiresAt: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 172800000)), segmentos: segmentosGiro, anuncioAdmin: anuncio || null });
-  await db.collection('historial_ruleta').add({ eventoId: evElegido.id, eventoTitulo: evElegido.titulo, eventoTexto: evElegido.texto, timestamp: ts });
 };
 
 function renderTablaEventos() {
