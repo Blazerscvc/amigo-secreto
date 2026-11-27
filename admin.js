@@ -2,15 +2,12 @@ let modoJugadorActivo = false;
 
 // FUNCIÓN DE CÁLCULO DE FASE POR FECHA
 function calcularFasePorFecha() {
-  const hoy = new Date();
-  const mes = hoy.getMonth(); // Noviembre es mes 10 (indexado en 0)
-  const dia = hoy.getDate();
+  const inicioDiaCena = Date.parse(`${diaCena}T00:00:00-05:00`);
+  const diasHastaCena = Math.ceil((inicioDiaCena - Date.now()) / 86_400_000);
 
-  // Progresión automática según se acerca la fecha de la cena
-  if (mes === 10 && dia >= 21) return "Semana Revil";
-  if (mes === 10 && dia >= 14) return "Caos";
-  if (mes === 10 && dia >= 7) return "Picante";
-
+  if (diasHastaCena <= 7) return "Semana Revil";
+  if (diasHastaCena <= 14) return "Caos";
+  if (diasHastaCena <= 21) return "Picante";
   return "Tranquila";
 }
 

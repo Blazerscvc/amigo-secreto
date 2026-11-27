@@ -15,7 +15,8 @@ const db = firebase.firestore();
 
 let isAdmin = false; let myAssignedFriendId = null;
 let myUserName = "Un Elfo"; let myCurrentCopos = 0; let myCurrentTotems = 0;
-const fechaCena = new Date(2026, 10, 28, 20, 0, 0).getTime();
+const diaCena = "2026-12-04";
+const fechaCena = Date.parse(`${diaCena}T20:00:00-05:00`);
 
 // NUEVO: unsubTienda para la fase 4
 let unsubMyUser = null; let unsubFases = null; let unsubEventos = null; let unsubGlobal = null; let unsubHistorial = null; let unsubUsers = null; let unsubBuzon = null; let unsubAsignaciones = null; let unsubBancoRegistry = null; let unsubTienda = null; let buzonInterval = null; let countdownInterval = null;
